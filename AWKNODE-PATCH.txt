@@ -1,0 +1,5 @@
+AWKNODE fork of nih-plug de42101: see 'AWKNODE PATCH' in src/wrapper/vst3/{inner,context,wrapper}.rs
+
+2026-11-20: nih_plug_egui/Cargo.toml enables egui-baseview's "windows_keyboard_workaround"
+feature: while a text box is focused the plugin window takes keyboard focus (SetFocus),
+so typing a preset name works in FL Studio (before, FL kept the keys).

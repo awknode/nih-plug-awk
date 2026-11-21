@@ -168,7 +168,7 @@ impl<P: Vst3Plugin> GuiContext for WrapperGuiContext<P> {
                     // FIXME: So this doesn't work for REAPER, because they just silently stop
                     //        processing audio when you bypass the plugin. Great. We can add a time
                     //        based heuristic to work around this in the meantime.
-                    if !self.inner.is_processing.load(Ordering::SeqCst) {
+                    if !self.inner.audio_is_live() {
                         self.inner.set_normalized_value_by_hash(
                             *hash,
                             normalized,

@@ -63,6 +63,11 @@ pub(crate) struct WrapperInner<P: Vst3Plugin> {
     /// Whether the plugin is currently processing audio. In other words, the last state
     /// `IAudioProcessor::setActive()` has been called with.
     pub is_processing: AtomicBool,
+    /// AWKNODE PATCH: when `process()` was last called (ms on `awk_now_ms()`'s clock). Hosts
+    /// like FL Studio can leave the plugin 'active' but stop calling `process()` (smart disable,
+    /// stopped audio device). nih-plug then deferred every GUI/host parameter change to an audio
+    /// callback that never came: knobs wouldn't move and GUI state loads blocked forever.
+    pub last_process_ms: std::sync::atomic::AtomicU64,
     /// The current audio IO layout. Modified through `IAudioProcessor::setBusArrangements()` after
     /// matching the proposed bus arrangement to one of the supported ones. The plugin's first audio
     /// IO layout is chosen as the default. Because of the way VST3 works it's not possible to
@@ -288,6 +293,7 @@ impl<P: Vst3Plugin> WrapperInner<P> {
             event_loop: AtomicRefCell::new(None),
 
             is_processing: AtomicBool::new(false),
+            last_process_ms: std::sync::atomic::AtomicU64::new(0),
             // Some hosts, like the current version of Bitwig and Ardour at the time of writing,
             // will try using the plugin's default not yet initialized bus arrangement. Because of
             // that, we'll always initialize this configuration even before the host requests a
@@ -476,11 +482,18 @@ impl<P: Vst3Plugin> WrapperInner<P> {
     /// Update the plugin's internal state, called by the plugin itself from the GUI thread. To
     /// prevent corrupting data and changing parameters during processing the actual state is only
     /// updated at the end of the audio processing cycle.
+    /// AWKNODE PATCH: active *and* the host called `process()` within the last 100 ms. Only then
+    /// is it safe to hand parameter changes and state loads to the audio thread.
+    pub fn audio_is_live(&self) -> bool {
+        self.is_processing.load(Ordering::SeqCst)
+            && awk_now_ms().saturating_sub(self.last_process_ms.load(Ordering::Relaxed)) < 100
+    }
+
     pub fn set_state_object_from_gui(&self, mut state: PluginState) {
         // Use a loop and timeouts to handle the super rare edge case when this function gets called
         // between a process call and the host disabling the plugin
         loop {
-            if self.is_processing.load(Ordering::SeqCst) {
+            if self.audio_is_live() {
                 // If the plugin is currently processing audio, then we'll perform the restore
                 // operation at the end of the audio call. This involves sending the state to the
                 // audio thread, having the audio thread handle the state restore at the very end of
@@ -650,4 +663,10 @@ impl<P: Vst3Plugin> MainThreadExecutor<Task<P>> for WrapperInner<P> {
             },
         }
     }
+}
+
+/// AWKNODE PATCH: monotonic milliseconds since first use (allocation-free after the first call).
+pub fn awk_now_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1
 }
